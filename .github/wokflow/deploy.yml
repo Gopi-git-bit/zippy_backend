@@ -1,0 +1,75 @@
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  build-test-deploy:
+    name: Build, Test, Deploy
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          
+      - name: Install Node dependencies
+        run: |
+          cd backend
+          npm install
+          
+      - name: Install Python dependencies
+        run: |
+          cd ai_agent
+          pip install -r requirements.txt
+          
+      - name: Run Node.js tests (if any)
+        run: |
+          cd backend
+          npm test
+        continue-on-error: false
+        
+      - name: Authenticate with Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+          
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v2
+        
+      - name: Configure Docker for GCR
+        run: |
+          gcloud auth configure-docker
+          
+      - name: Build Docker image
+        run: |
+          docker build -t gcr.io/${{ secrets.GCP_PROJECT_ID }}/zippy-backend:${{ github.sha }} .
+          docker tag gcr.io/${{ secrets.GCP_PROJECT_ID }}/zippy-backend:${{ github.sha }} gcr.io/${{ secrets.GCP_PROJECT_ID }}/zippy-backend:latest
+          
+      - name: Push Docker image to GCR
+        run: |
+          docker push gcr.io/${{ secrets.GCP_PROJECT_ID }}/zippy-backend:${{ github.sha }}
+          docker push gcr.io/${{ secrets.GCP_PROJECT_ID }}/zippy-backend:latest
+          
+      - name: Deploy to Google Cloud Run
+        run: |
+          gcloud run deploy zippy-backend \
+            --image gcr.io/${{ secrets.GCP_PROJECT_ID }}/zippy-backend:${{ github.sha }} \
+            --platform managed \
+            --region us-central1 \
+            --allow-unauthenticated \
+            --memory 512Mi \
+            --cpu 1 \
+            --max-instances 10
