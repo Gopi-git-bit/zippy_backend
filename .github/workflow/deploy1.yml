@@ -1,0 +1,78 @@
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  build-test-deploy:
+    name: Build, Test, Deploy
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          
+      - name: Install Node dependencies
+        run: |
+          cd backend
+          npm install
+          
+      - name: Install Python dependencies
+        run: |
+          cd ai_agent
+          pip install -r requirements.txt
+          
+      - name: Run Node.js tests (if any)
+        run: |
+          cd backend
+          npm test
+        continue-on-error: false
+        
+      - name: Install doctl
+        uses: digitalocean/action-doctl@v2
+        with:
+          token: ${{ secrets.DIGITALOCEAN_ACCESS_TOKEN }}
+          
+      - name: Log in to DigitalOcean Container Registry
+        run: doctl registry login --expiry-seconds 1200
+        
+      - name: Build Docker image
+        run: |
+          docker build -t registry.digitalocean.com/${{ secrets.DO_REGISTRY_NAME }}/zippy-backend:${{ github.sha }} .
+          docker tag registry.digitalocean.com/${{ secrets.DO_REGISTRY_NAME }}/zippy-backend:${{ github.sha }} registry.digitalocean.com/${{ secrets.DO_REGISTRY_NAME }}/zippy-backend:latest
+          
+      - name: Push Docker image to DigitalOcean Container Registry
+        run: |
+          docker push registry.digitalocean.com/${{ secrets.DO_REGISTRY_NAME }}/zippy-backend:${{ github.sha }}
+          docker push registry.digitalocean.com/${{ secrets.DO_REGISTRY_NAME }}/zippy-backend:latest
+          
+      - name: Deploy to DigitalOcean App Platform
+        run: |
+          doctl apps create-deployment ${{ secrets.DO_APP_ID }} --wait
+          
+      # Alternative deployment to DigitalOcean Droplet via SSH
+      # - name: Deploy to DigitalOcean Droplet
+      #   uses: appleboy/ssh-action@v1.0.0
+      #   with:
+      #     host: ${{ secrets.DO_DROPLET_IP }}
+      #     username: ${{ secrets.DO_DROPLET_USER }}
+      #     key: ${{ secrets.DO_SSH_PRIVATE_KEY }}
+      #     script: |
+      #       docker login registry.digitalocean.com -u ${{ secrets.DIGITALOCEAN_ACCESS_TOKEN }} -p ${{ secrets.DIGITALOCEAN_ACCESS_TOKEN }}
+      #       docker pull registry.digitalocean.com/${{ secrets.DO_REGISTRY_NAME }}/zippy-backend:latest
+      #       docker stop zippy-backend || true
+      #       docker rm zippy-backend || true
+      #       docker run -d --name zippy-backend -p 80:3000 --restart unless-stopped registry.digitalocean.com/${{ secrets.DO_REGISTRY_NAME }}/zippy-backend:latest
